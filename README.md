@@ -50,6 +50,8 @@ python server.py
 # 浏览器访问 http://localhost:8080
 ```
 
+> ⚠️ **注意**：如果直接运行 `python server.py` 报错 `FileNotFoundError: vector_db\\chunks.pkl`，说明尚未构建索引，请先执行 `python index_docs.py`。
+
 ### 自定义端口
 
 ```bash
