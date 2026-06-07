@@ -1,10 +1,10 @@
 # 📚 知识库搜索系统
 
-> 基于 TF-IDF 的轻量级内部知识库搜索引擎，专为小团队（~20 人）设计，零外部依赖，Windows 开箱即用。
+> 基于 TF-IDF 的轻量级内部知识库搜索引擎，支持本地 Markdown 文档 + 外部网页文档统一搜索。
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-v1.2-brightgreen.svg)](https://github.com/zyddst/knowledge_search)
+[![Version](https://img.shields.io/badge/Version-v1.3-brightgreen.svg)](https://github.com/zyddst/knowledge_search)
 
 ---
 
@@ -14,8 +14,8 @@
 - 🖥️ **CLI 工具** — 终端直接搜索：`python search.py "关键词"`
 - 🌐 **Web 搜索页面** — 浏览器访问，输入框搜索，结果卡片展示
 - 🔌 **RESTful API** — GET/POST `/search`，返回 JSON，支持跨域
+- 🌍 **外部文档抓取** — 配置 URL 自动抓取网页 → 转为 Markdown → 纳入索引
 - 💬 **企业微信预留** — `/wechat` 端点，待接入企业微信 Bot
-- 📦 **零外部依赖** — 仅需 Python 3.8+ 和 scikit-learn，不联网
 - 🪟 **Windows 兼容** — GBK 编码终端下中文不乱码、不崩溃
 - ⚡ **快速响应** — < 100 篇文档场景下搜索 < 200ms
 
@@ -24,7 +24,7 @@
 ### 环境要求
 
 - Python 3.8+
-- scikit-learn >= 0.24
+- 依赖见 `requirements.txt`
 
 ### 安装与运行
 
@@ -58,22 +58,57 @@ python server.py
 python server.py 9000    # 在 9000 端口启动
 ```
 
+## 🌍 外部文档抓取
+
+除了本地 `docs/` 下的 Markdown 文件，还可以抓取外部网页文档纳入搜索。
+
+**1. 编辑 `config.py`，配置外部源：**
+
+```python
+EXTERNAL_SOURCES = [
+    {
+        "name": "Python 教程",
+        "urls": [
+            "https://docs.python.org/zh-cn/3/tutorial/introduction.html",
+        ],
+        "content_selector": "article",        # CSS 选择器，提取正文
+        "exclude_selectors": [".sidebar"],    # 要排除的元素
+    },
+]
+```
+
+**2. 抓取并构建索引：**
+
+```bash
+python index_docs.py --fetch
+```
+
+**3. 搜索：** 跟本地文档完全一样，`python search.py "关键词"` 或 Web 页面搜索，结果同时包含本地文档和网页内容。
+
+```bash
+# 跳过抓取，只用缓存构建索引
+python index_docs.py
+
+# 重新抓取 + 索引
+python index_docs.py --fetch
+```
+
 ## 📂 项目结构
 
 ```
 knowledge_search/
-├── docs/                      # 📄 知识库文档（用户维护，被索引搜索）
+├── docs/                      # 📄 本地知识库文档
 │   ├── 新人指南.md
 │   └── API接口规范.md
-├── specs/                     # 📋 项目规划文档（不被索引）
+├── fetched_docs/              # 🌍 外部文档缓存（fetcher.py 自动生成）
+│   └── <source_name>/
+├── specs/                     # 📋 项目规划文档
 │   ├── 需求文档.md
 │   └── 系统设计文档.md
-├── vector_db/                 # 📊 索引文件（自动生成，勿手动修改）
-│   ├── chunks.pkl             # 文本块列表
-│   ├── vectorizer.pkl         # TF-IDF 向量化器
-│   ├── tfidf_matrix.pkl       # TF-IDF 稀疏矩阵
-│   └── meta.txt               # 索引元信息
-├── config.py                  # ⚙️  全局配置
+├── vector_db/                 # 📊 索引文件（自动生成）
+├── config.py                  # ⚙️  全局配置（含外部文档源）
+├── fetcher.py                 # 🌍 网页抓取 + HTML→MD 转换
+├── wechat.py                  # 💬 企业微信消息处理
 ├── index_docs.py              # 🔧 索引构建工具
 ├── search.py                  # 🔍 CLI 搜索工具
 ├── server.py                  # 🌐 Web 服务（API + 搜索页面）
@@ -136,14 +171,23 @@ curl http://localhost:8080/health
 编辑 `config.py` 调整参数：
 
 ```python
-DOCS_DIR = "./docs"           # 文档目录路径
-VECTOR_DB_DIR = "./vector_db" # 索引存储路径
+# 搜索参数
 CHUNK_SIZE = 500              # 文本块大小（字符数）
 CHUNK_OVERLAP = 50            # 滑动窗口重叠量
 TOP_K = 5                     # 搜索返回结果数
+
+# 外部文档源
+EXTERNAL_SOURCES = [
+    {
+        "name": "Python 教程",
+        "urls": ["https://docs.python.org/zh-cn/3/tutorial/introduction.html"],
+        "content_selector": "article",
+        "exclude_selectors": [".sidebar"],
+    },
+]
 ```
 
-修改配置后需重建索引：`python index_docs.py`
+修改配置后需重建索引：`python index_docs.py --fetch`
 
 ## 🔬 搜索算法
 
@@ -164,6 +208,7 @@ score = TF-IDF 余弦相似度(query, chunk)
 - [x] **v1.0** — CLI 搜索 + Web API + 企业微信端点
 - [x] **v1.1** — Web 搜索页面
 - [x] **v1.2** — Windows 编码兼容 + 完善文档
+- [x] **v1.3** — 外部文档抓取 + 多源索引 + 企微加解密
 - [ ] **v2.0** — 向量嵌入语义搜索（ChromaDB / bge-large-zh）
 - [ ] **v2.1** — 企业微信 Bot 接入
 - [ ] **v3.0** — RAG 答案生成 + LLM 集成
@@ -178,8 +223,9 @@ score = TF-IDF 余弦相似度(query, chunk)
 ## 🤝 贡献指南
 
 1. 将新的 Markdown 文档放入 `docs/` 目录
-2. 运行 `python index_docs.py` 重建索引
-3. 如需修改搜索行为，编辑 `config.py` 调整参数
+2. 在 `config.py` 的 `EXTERNAL_SOURCES` 中配置外部文档 URL
+3. 运行 `python index_docs.py --fetch` 重建索引
+4. 如需修改搜索行为，编辑 `config.py` 调整参数
 
 ## 📄 License
 

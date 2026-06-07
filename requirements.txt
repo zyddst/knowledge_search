@@ -1,1 +1,4 @@
 scikit-learn>=0.24
+pycryptodome
+requests
+beautifulsoup4

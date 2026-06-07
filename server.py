@@ -8,8 +8,9 @@
   POST /search  {"q": "关键词"} → JSON
   GET  /health → 健康检查
 
-接入企业微信:
-  POST /wechat  {"keyword": "..."} → {"reply": "..."}
+接入企业微信（明文模式）:
+  GET  /wechat?echostr=... → 签名校验 + 返回 echostr
+  POST /wechat  <xml> → 解析消息 → 搜索 → 返回 XML 回复
 """
 
 import sys
@@ -21,7 +22,16 @@ from urllib.parse import urlparse, parse_qs
 import json
 
 from sklearn.metrics.pairwise import cosine_similarity
-from config import VECTOR_DB_DIR, TOP_K
+from config import VECTOR_DB_DIR, TOP_K, WECHAT_TOKEN, WECHAT_CORP_ID, WECHAT_ENCODING_AES_KEY
+from wechat import (
+    parse_message,
+    parse_encrypted_message,
+    build_text_reply,
+    build_encrypted_reply,
+    format_search_reply,
+    calc_signature,
+    decrypt,
+)
 
 
 def load_index():
@@ -175,35 +185,103 @@ class APIHandler(BaseHTTPRequestHandler):
         elif p.path == "/health":
             self._json({"status": "ok"})
         elif p.path == "/wechat":
-            echostr = parse_qs(p.query).get("echostr", [""])[0]
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain")
-            self.end_headers()
-            self.wfile.write(echostr.encode())
+            params = parse_qs(p.query)
+            echostr = params.get("echostr", [""])[0]
+            msg_signature = params.get("msg_signature", [""])[0]
+            timestamp = params.get("timestamp", [""])[0]
+            nonce = params.get("nonce", [""])[0]
+
+            # 加密模式
+            if WECHAT_ENCODING_AES_KEY and WECHAT_TOKEN:
+                # 1. 签名校验
+                expected = calc_signature(WECHAT_TOKEN, timestamp, nonce, echostr)
+                print(f"[VERIFY] token={WECHAT_TOKEN!r}", flush=True)
+                print(f"[VERIFY] timestamp={timestamp!r} nonce={nonce!r}", flush=True)
+                print(f"[VERIFY] echostr[:50]={echostr[:50]!r}", flush=True)
+                print(f"[VERIFY] expected={expected!r}", flush=True)
+                print(f"[VERIFY] received={msg_signature!r}", flush=True)
+                print(f"[VERIFY] match={expected == msg_signature}", flush=True)
+
+                # 2. 解密 echostr
+                try:
+                    plain = decrypt(echostr, WECHAT_ENCODING_AES_KEY)
+                    print(f"[VERIFY] decrypted echostr={plain!r}", flush=True)
+                except Exception as e:
+                    print(f"[VERIFY] decrypt error: {e}", flush=True)
+                    self.send_response(500)
+                    self.send_header("Content-Type", "text/plain")
+                    self.end_headers()
+                    self.wfile.write(b"decrypt echostr failed")
+                    return
+
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(plain.encode("utf-8"))
+                print("[VERIFY] response sent OK", flush=True)
+
+            else:
+                # 明文模式
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain")
+                self.end_headers()
+                self.wfile.write(echostr.encode())
         else:
             self._json({"error": "Not found"}, 404)
 
     def do_POST(self):
         p = urlparse(self.path)
-        if p.path in ("/search", "/wechat"):
-            length = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(length).decode("utf-8")
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length).decode("utf-8")
+
+        if p.path == "/search":
             try:
                 data = json.loads(body)
             except json.JSONDecodeError:
                 return self._json({"error": "请求体不是合法 JSON"}, 400)
 
-            q = data.get("q", data.get("keyword", "")).strip()
+            q = data.get("q", "").strip()
             if not q:
                 return self._json({"error": "缺少 q 参数"}, 400)
 
+            self._json({"query": q, "results": do_search(q)})
+
+        elif p.path == "/wechat":
+            # 解析企业微信消息（加密或明文）
+            if WECHAT_ENCODING_AES_KEY:
+                msg = parse_encrypted_message(body, WECHAT_ENCODING_AES_KEY)
+            else:
+                msg = parse_message(body)
+
+            q = msg.get("Content", "").strip()
+
+            if not q:
+                # 非文本消息（图片、事件等），返回空（不回复）
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain")
+                self.end_headers()
+                self.wfile.write(b"")
+                return
+
             results = do_search(q)
-            if p.path == "/wechat":
-                if not results:
-                    return self._json({"reply": f"未找到与「{q}」相关的文档"})
-                lines = [f"【{r['title']}】{r['source']}" for r in results[:3]]
-                return self._json({"reply": "找到相关文档:\n" + "\n".join(lines)})
-            self._json({"query": q, "results": results})
+            to_user = msg.get("FromUserName", "")
+            from_user = msg.get("ToUserName", WECHAT_CORP_ID)
+            reply_text = format_search_reply(q, results)
+
+            # 构建回复（加密或明文）
+            if WECHAT_ENCODING_AES_KEY and WECHAT_TOKEN:
+                reply_xml = build_encrypted_reply(
+                    to_user, from_user, reply_text,
+                    WECHAT_ENCODING_AES_KEY, WECHAT_CORP_ID, WECHAT_TOKEN,
+                )
+            else:
+                reply_xml = build_text_reply(to_user, from_user, reply_text)
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/xml; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(reply_xml.encode("utf-8"))
+
         else:
             self._json({"error": "Not found"}, 404)
 
@@ -234,9 +312,14 @@ def main():
         f"   API搜索:  http://localhost:{port}/search?q=关键词",
         "  ================================",
         "",
-        "  按 Ctrl+C 停止服务",
-        "",
     ]
+    if WECHAT_TOKEN:
+        banner.append(f"  企业微信: 已配置 (回调 URL: /wechat)")
+    else:
+        banner.append(f"  企业微信: 未配置，编辑 config.py 设置 WECHAT_TOKEN")
+    banner.append("")
+    banner.append("  按 Ctrl+C 停止服务")
+    banner.append("")
     for line in banner:
         print(line, flush=True)
 
