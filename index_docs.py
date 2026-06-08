@@ -141,6 +141,11 @@ def build_index(dirs: list[Path] | None = None, do_fetch: bool = False):
     )
     tfidf_matrix = vectorizer.fit_transform(contents)
 
+    # 构建 BM25 索引
+    from search import build_bm25_index
+    bm25_index = build_bm25_index(all_chunks)
+    print(f"       BM25 词汇量: {len(bm25_index['idf'])}")
+
     print(f"[3/4] 保存索引...")
     db_dir = Path(VECTOR_DB_DIR)
     db_dir.mkdir(parents=True, exist_ok=True)
@@ -151,6 +156,8 @@ def build_index(dirs: list[Path] | None = None, do_fetch: bool = False):
         pickle.dump(vectorizer, f)
     with open(db_dir / "tfidf_matrix.pkl", "wb") as f:
         pickle.dump(tfidf_matrix, f)
+    with open(db_dir / "bm25.pkl", "wb") as f:
+        pickle.dump(bm25_index, f)
 
     # 写 meta
     with open(db_dir / "meta.txt", "w", encoding="utf-8") as f:

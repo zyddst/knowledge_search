@@ -8,21 +8,18 @@
   POST /search  {"q": "关键词"} → JSON
   GET  /health → 健康检查
 
-接入企业微信（明文模式）:
+接入企业微信:
   GET  /wechat?echostr=... → 签名校验 + 返回 echostr
   POST /wechat  <xml> → 解析消息 → 搜索 → 返回 XML 回复
 """
 
 import sys
-import re
-import pickle
-from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 import json
 
-from sklearn.metrics.pairwise import cosine_similarity
-from config import VECTOR_DB_DIR, TOP_K, WECHAT_TOKEN, WECHAT_CORP_ID, WECHAT_ENCODING_AES_KEY
+from config import TOP_K, WECHAT_TOKEN, WECHAT_CORP_ID, WECHAT_ENCODING_AES_KEY
+from search import load_index, hybrid_search
 from wechat import (
     parse_message,
     parse_encrypted_message,
@@ -33,52 +30,13 @@ from wechat import (
     decrypt,
 )
 
-
-def load_index():
-    db_dir = Path(VECTOR_DB_DIR)
-    with open(db_dir / "chunks.pkl", "rb") as f:
-        chunks = pickle.load(f)
-    with open(db_dir / "vectorizer.pkl", "rb") as f:
-        vectorizer = pickle.load(f)
-    with open(db_dir / "tfidf_matrix.pkl", "rb") as f:
-        tfidf_matrix = pickle.load(f)
-    return chunks, vectorizer, tfidf_matrix
-
-
-chunks, vectorizer, tfidf_matrix = load_index()
+chunks, vectorizer, tfidf_matrix, bm25_index = load_index()
 
 
 def do_search(query: str, top_k: int = TOP_K) -> list[dict]:
-    query_vec = vectorizer.transform([query])
-    tfidf_scores = cosine_similarity(query_vec, tfidf_matrix).flatten()
-
-    keywords = set(re.findall(r"[一-鿿]+|\w+", query.lower()))
-    combined = []
-    for i, chunk in enumerate(chunks):
-        content_lower = chunk["content"].lower()
-        title_lower = chunk["title"].lower()
-        hits = sum(1 for kw in keywords if kw in content_lower)
-        title_hits = sum(1 for kw in keywords if kw in title_lower)
-        score = tfidf_scores[i] + hits * 0.05 + title_hits * 0.2
-        combined.append((score, chunk))
-
-    combined.sort(key=lambda x: x[0], reverse=True)
-
-    seen = set()
-    results = []
-    for score, chunk in combined:
-        src = chunk["source"]
-        if src not in seen:
-            seen.add(src)
-            results.append({
-                "title": chunk["title"],
-                "source": chunk["source"],
-                "snippet": chunk["content"][:200],
-                "score": round(float(score), 3),
-            })
-        if len(results) >= top_k:
-            break
-    return results
+    """搜索知识库（混合搜索：TF-IDF + BM25 + RRF）"""
+    return hybrid_search(query, chunks, vectorizer, tfidf_matrix,
+                         bm25_index, top_k)
 
 
 HOME_PAGE = """<!DOCTYPE html>
