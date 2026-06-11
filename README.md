@@ -1,6 +1,6 @@
 # 📚 知识库搜索系统
 
-> 基于 TF-IDF + BM25 混合排序的轻量级知识库搜索引擎，支持本地 + 外部网页文档统一搜索，多层过滤防误报。
+> 基于 TF-IDF + BM25 混合排序的轻量级知识库搜索引擎，支持本地 + 外部网页文档统一搜索，多层过滤防误报，关键词高亮显示。
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -11,8 +11,9 @@
 ## ✨ 特性
 
 - 🔍 **混合搜索** — TF-IDF + BM25 → RRF 融合排序，多层相关度过滤
+- ✨ **关键词高亮** — CLI 黄字 + Web 黄底橙字，命中词一目了然
 - 🖥️ **CLI 工具** — `python search.py "关键词"`
-- 🌐 **Web 搜索页面** — 浏览器搜索输入框 + 结果卡片
+- 🌐 **Web 搜索页面** — 浏览器搜索输入框 + 结果卡片 + 高亮
 - 🔌 **RESTful API** — GET/POST `/search`，JSON + CORS
 - 🌍 **外部文档抓取** — 配置 URL → 自动抓取网页 → 纳入索引
 - 💬 **企业微信预留** — `/wechat` 端点（AES 加解密已就绪）
@@ -44,7 +45,7 @@ python server.py
 # 浏览器访问 http://localhost:8080
 ```
 
-> ⚠️ 如果 `python server.py` 报 `FileNotFoundError: vector_db\\chunks.pkl`，先执行 `python index_docs.py`。
+> ⚠️ 如果 `python server.py` 报 `FileNotFoundError: vector_db\chunks.pkl`，先执行 `python index_docs.py`。
 
 ## 🌍 外部文档抓取
 
@@ -77,7 +78,8 @@ knowledge_search/
 │   ├── chunks.pkl             # 文本块
 │   ├── vectorizer.pkl         # TF-IDF 向量化器
 │   ├── tfidf_matrix.pkl       # TF-IDF 矩阵
-│   └── bm25.pkl               # BM25 倒排索引
+│   ├── bm25.pkl               # BM25 倒排索引
+│   └── embeddings.pkl         # 语义向量（可选）
 ├── config.py                  # 全局配置（含搜索参数、阈值）
 ├── fetcher.py                 # 网页抓取 + HTML→MD
 ├── search.py                  # 混合搜索引擎（TF-IDF + BM25 + RRF）
@@ -105,7 +107,7 @@ curl "http://localhost:8080/search?q=报销流程"
 
 ```
 TF-IDF(char_wb) 余弦相似度  →  rank_tfidf     ┐
-                                                ├──→ RRF 融合 → 多层过滤 → Top-K
+                                                  ├──→ RRF 融合 → 多层过滤 → Top-K
 BM25 关键词匹配              →  rank_bm25     ┘
 
 RRF: 1/(60 + rank_tfidf) + 1/(60 + rank_bm25)  → 归一化到 0~1
@@ -113,20 +115,26 @@ RRF: 1/(60 + rank_tfidf) + 1/(60 + rank_bm25)  → 归一化到 0~1
 
 **多层过滤：** TF-IDF 阈值 → BM25 零检查 → 零分末位惩罚 → 相关度阈值
 
+**关键词高亮：** 匹配策略与分词一致（中文单字 + 英文整词），CLI 用 ANSI 黄字，Web 用 `<mark>` 黄底橙字。
+
 ## ⚙️ 配置
 
 ```python
+# 文档分块
+CHUNK_SIZE = 500           # 文本块大小
+CHUNK_OVERLAP = 50         # 重叠量
+
 # 搜索参数
-CHUNK_SIZE = 500       # 文本块大小
-TOP_K = 5              # 返回结果数
+TOP_K = 5                  # 返回结果数
 
 # BM25 参数
-BM25_K1 = 1.5          # 词频饱和
-BM25_B = 0.75          # 长度归一化
+BM25_K1 = 1.5             # 词频饱和
+BM25_B = 0.75             # 长度归一化
+RRF_K = 60                # RRF 平滑参数
 
 # 相关度阈值
-MIN_RELEVANCE = 0.80   # RRF 归一化最低分
-MIN_TFIDF = 0.05       # TF-IDF 绝对底线
+MIN_RELEVANCE = 0.60      # RRF 归一化最低分
+MIN_TFIDF = 0.05          # TF-IDF 绝对底线
 ```
 
 ## 🗺️ 路线图
@@ -135,7 +143,7 @@ MIN_TFIDF = 0.05       # TF-IDF 绝对底线
 - [x] **v1.1** — Web 搜索页面
 - [x] **v1.2** — Windows 编码兼容
 - [x] **v1.3** — 外部文档抓取 + 企微加解密
-- [x] **v1.4** — 混合搜索（TF-IDF + BM25 + RRF）
+- [x] **v1.4** — 混合搜索（TF-IDF + BM25 + RRF）+ 关键词高亮
 - [ ] **v2.0** — 向量嵌入语义搜索
 - [ ] **v3.0** — RAG 答案生成
 
